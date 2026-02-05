@@ -14,20 +14,22 @@ RAIL_CHAR = '║'
 SHIELD_CHAR = 'X'  # 쉴드 표시
 
 MAX_LIFE = 5
-BASE_AMMO = 10
+BASE_AMMO = 8
 BASE_REGEN = 1
 
 MULTI_TIME = 5.0
 RAIL_TIME = 3.0
-SHIELD_TIME = 25.0  # 쉴드 지속시간 25초
+SHIELD_TIME = 15.0  # 쉴드 지속시간 15초
 SHIELD_WIDTH = 3
 
-BOSS_HP = 30
+BOSS_BASE_HP = 30
+BOSS_BASE_SHOT_INTERVAL = 3.0
 
 MIN_INV_MOVE = 0.1
 MIN_BOSS_MOVE = 0.05
 
-SPECIAL_SHOT_INTERVAL = 4.0  # 특수 잡몹 공격 간격
+SPECIAL_SHOT_MIN = 2.5  # 특수 잡몹 최소 공격 간격
+SPECIAL_SHOT_MAX = 4.5  # 특수 잡몹 최대 공격 간격
 
 # ================= 메인 =================
 def main(stdscr):
@@ -90,7 +92,8 @@ def main(stdscr):
                 "char": INVADER_CHAR,
                 "size": 1,
                 "special": False,
-                "last_shot": 0
+                "last_shot": 0,
+                "shot_interval": 0
             })
 
         # 특별 인베이더: 5라운드마다 한 마리씩 추가
@@ -100,11 +103,14 @@ def main(stdscr):
             for idx in special_indices:
                 invaders[idx]["special"] = True
                 invaders[idx]["char"] = BOSS_CHAR  # M으로 표시
+                invaders[idx]["shot_interval"] = random.uniform(SPECIAL_SHOT_MIN, SPECIAL_SHOT_MAX)
 
         # 보스 라운드
         if round_num % 10 == 0:
-            boss = {"x": w // 2 - 1, "y": 2, "hp": BOSS_HP}
             boss_count += 1
+            boss_hp = BOSS_BASE_HP + (boss_count - 1) * 10  # 체감 강하게 HP 증가
+            boss_shot_interval = max(1.0, BOSS_BASE_SHOT_INTERVAL - (boss_count - 1) * 0.2)  # 발사 속도 증가
+            boss = {"x": w // 2 - 1, "y": 2, "hp": boss_hp, "shot_interval": boss_shot_interval}
             set_msg("BOSS STAGE!", 3)
         else:
             boss = None
@@ -116,20 +122,21 @@ def main(stdscr):
     # ================= 메인 루프 =================
     while True:
         now = time.time()
-        if shield_on and time.time() >= shield_end:
+        if shield_on and now >= shield_end:
             shield_on = False
         stdscr.clear()
 
         # ---------- 입력 ----------
         key = stdscr.getch()
-        if key == ord('q'):
+        if key == ord('q'):  # 쉴드 발동
             if inventory.get("shield", False):
                 shield_on = True
                 shield_end = now + SHIELD_TIME
                 inventory["shield"] = False
-                set_msg("SHIELD ACTIVATED (25s)")
-            else:
-                break
+                set_msg("SHIELD ACTIVATED (15s)")
+        elif key == ord('0'):  # 게임 종료
+            break
+
         if key == curses.KEY_LEFT and px > 1:
             px -= 1
         if key == curses.KEY_RIGHT and px < w - 2:
@@ -199,18 +206,25 @@ def main(stdscr):
                 for i in invaders:
                     i["x"] += inv_dir
 
+        # ---------- 플레이어와 잡몹 충돌 체크 (즉시 게임 오버) ----------
+        for inv in invaders:
+            if inv["y"] == py:
+                life = 0
+                set_msg("GAME OVER! 잡몹과 충돌")
+                break
+
         # ---------- 특수 잡몹 공격 ----------
         for inv in invaders:
             if inv.get("special"):
-                if now - inv["last_shot"] > SPECIAL_SHOT_INTERVAL:
+                if now - inv["last_shot"] > inv["shot_interval"]:
                     inv["last_shot"] = now
+                    inv["shot_interval"] = random.uniform(SPECIAL_SHOT_MIN, SPECIAL_SHOT_MAX)
                     for dx in [-1, 0, 1]:  # 3칸 폭
                         special_shots.append({"x": inv["x"] + dx, "y": inv["y"] + 1})
 
         # ---------- 특수 잡몹 공격 탄 이동 ----------
         for s in special_shots[:]:
             s["y"] += 1
-            # 쉴드가 활성화되어 있으면 제거
             if shield_on and px-1 <= s["x"] <= px+1 and s["y"] == py - 1:
                 special_shots.remove(s)
                 continue
@@ -229,7 +243,7 @@ def main(stdscr):
                     boss_dir *= -1
                 boss["x"] += boss_dir
 
-            if now > boss_burst_until and now - last_boss_shot > 3:
+            if now > boss_burst_until and now - last_boss_shot > boss["shot_interval"]:
                 boss_burst_until = now + 1
                 last_boss_shot = now
 
@@ -241,7 +255,6 @@ def main(stdscr):
 
         for bb in boss_bullets[:]:
             bb["y"] += 1
-            # 쉴드가 활성화되어 있으면 제거
             if shield_on and px-1 <= bb["x"] <= px+1 and bb["y"] == py - 1:
                 boss_bullets.remove(bb)
                 continue
@@ -252,7 +265,7 @@ def main(stdscr):
                 boss_bullets.remove(bb)
 
         # ---------- 라운드 클리어 ----------
-        if not invaders and (not boss or boss["hp"] <= 0):
+        if (boss and boss["hp"] <= 0) or (not boss and not invaders):
             round_num += 1
             if round_num % 2 == 0:
                 item = random.choice(["multishot", "railgun", "heal", "shield"])
@@ -323,7 +336,7 @@ def main(stdscr):
         if boss:
             for i in range(3):
                 stdscr.addch(boss["y"], boss["x"] + i, BOSS_CHAR)
-            bar = int((boss["hp"] / BOSS_HP) * 20)
+            bar = int((boss["hp"] / (BOSS_BASE_HP + (boss_count - 1)*10)) * 20)
             stdscr.addstr(1, w - 22, "[" + "#" * bar + " " * (20 - bar) + "]")
 
         for bb in boss_bullets:
@@ -337,6 +350,9 @@ def main(stdscr):
 
         stdscr.refresh()
         time.sleep(TICK)
+
+if __name__ == "__main__":
+    curses.wrapper(main)
 
 if __name__ == "__main__":
     curses.wrapper(main)
